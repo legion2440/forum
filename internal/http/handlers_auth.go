@@ -113,7 +113,7 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, newMeResponse(*account.User, account.HasPassword, account.LinkedAccounts))
+	writeJSON(w, http.StatusOK, h.newMeResponse(r, *account.User, account.HasPassword, account.LinkedAccounts))
 }
 
 func (h *Handler) trackLocalAuthAttempt(identifier string, err error) {

@@ -319,7 +319,7 @@ func buildServices(repos repositories, uploadDir string) (services, error) {
 			Accounts:   repos.accounts,
 		}),
 	)
-	centerService := service.NewCenterService(repos.center, repos.users, repos.posts, repos.comments, appClock, notificationPublisher)
+	centerService := service.NewCenterService(repos.center, repos.users, repos.posts, repos.comments, appClock, notificationPublisher, repos.moderation)
 	postService := service.NewPostService(repos.posts, repos.comments, repos.categories, repos.reactions, attachmentService, appClock, centerService)
 	privateMessageService := service.NewPrivateMessageService(repos.users, repos.privateMessages, attachmentService, appClock, centerService)
 	moderationService := service.NewModerationService(repos.users, repos.posts, repos.comments, repos.categories, repos.moderation, appClock, centerService)

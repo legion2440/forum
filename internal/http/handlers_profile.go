@@ -12,33 +12,41 @@ import (
 )
 
 type publicProfileResponse struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"displayName"`
-	Role        string `json:"role"`
+	ID          string   `json:"id"`
+	Username    string   `json:"username"`
+	DisplayName string   `json:"displayName"`
+	Role        string   `json:"role"`
 	Badges      []string `json:"badges,omitempty"`
-	FirstName   string `json:"firstName"`
-	LastName    string `json:"lastName"`
-	Age         int    `json:"age"`
-	Gender      string `json:"gender"`
-	IsFollowing bool   `json:"isFollowing"`
+	FirstName   string   `json:"firstName"`
+	LastName    string   `json:"lastName"`
+	Age         int      `json:"age"`
+	Gender      string   `json:"gender"`
+	IsFollowing bool     `json:"isFollowing"`
+}
+
+type roleRequestStatusResponse struct {
+	ID            int64     `json:"id"`
+	RequestedRole string    `json:"requestedRole"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 type meResponse struct {
-	ID                int64                         `json:"id"`
-	Email             string                        `json:"email"`
-	Username          string                        `json:"username"`
-	DisplayName       string                        `json:"displayName"`
-	FirstName         string                        `json:"firstName"`
-	LastName          string                        `json:"lastName"`
-	Age               int                           `json:"age"`
-	Gender            string                        `json:"gender"`
-	Role              string                        `json:"role"`
-	Badges            []string                      `json:"badges,omitempty"`
-	NeedsProfileSetup bool                          `json:"needsProfileSetup"`
-	CreatedAt         time.Time                     `json:"created_at"`
-	HasPassword       bool                          `json:"hasPassword"`
-	LinkedAccounts    []service.LinkedAccountStatus `json:"linkedAccounts,omitempty"`
+	ID                 int64                         `json:"id"`
+	Email              string                        `json:"email"`
+	Username           string                        `json:"username"`
+	DisplayName        string                        `json:"displayName"`
+	FirstName          string                        `json:"firstName"`
+	LastName           string                        `json:"lastName"`
+	Age                int                           `json:"age"`
+	Gender             string                        `json:"gender"`
+	Role               string                        `json:"role"`
+	Badges             []string                      `json:"badges,omitempty"`
+	NeedsProfileSetup  bool                          `json:"needsProfileSetup"`
+	CreatedAt          time.Time                     `json:"created_at"`
+	HasPassword        bool                          `json:"hasPassword"`
+	LinkedAccounts     []service.LinkedAccountStatus `json:"linkedAccounts,omitempty"`
+	PendingRoleRequest *roleRequestStatusResponse    `json:"pendingRoleRequest,omitempty"`
 }
 
 type updateProfileRequest struct {
@@ -175,7 +183,7 @@ func (h *Handler) handleMyProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, newMeResponse(*user, strings.TrimSpace(user.PassHash) != "", nil))
+	writeJSON(w, http.StatusOK, h.newMeResponse(r, *user, strings.TrimSpace(user.PassHash) != "", nil))
 }
 
 func newPublicProfileResponse(user domain.User) publicProfileResponse {
@@ -192,22 +200,38 @@ func newPublicProfileResponse(user domain.User) publicProfileResponse {
 	}
 }
 
-func newMeResponse(user domain.User, hasPassword bool, linkedAccounts []service.LinkedAccountStatus) meResponse {
+func (h *Handler) newMeResponse(r *http.Request, user domain.User, hasPassword bool, linkedAccounts []service.LinkedAccountStatus) meResponse {
+	var pendingRoleRequest *roleRequestStatusResponse
+	if h != nil && h.moderation != nil {
+		if request, err := h.moderation.GetMyPendingRoleRequest(r.Context(), user.ID); err == nil && request != nil {
+			pendingRoleRequest = newRoleRequestStatusResponse(*request)
+		}
+	}
 	return meResponse{
-		ID:                user.ID,
-		Email:             user.Email,
-		Username:          user.Username,
-		DisplayName:       strings.TrimSpace(user.DisplayName),
-		FirstName:         strings.TrimSpace(user.FirstName),
-		LastName:          strings.TrimSpace(user.LastName),
-		Age:               user.Age,
-		Gender:            strings.TrimSpace(user.Gender),
-		Role:              string(user.Role),
-		Badges:            user.Badges,
-		NeedsProfileSetup: !user.ProfileInitialized,
-		CreatedAt:         user.CreatedAt,
-		HasPassword:       hasPassword,
-		LinkedAccounts:    linkedAccounts,
+		ID:                 user.ID,
+		Email:              user.Email,
+		Username:           user.Username,
+		DisplayName:        strings.TrimSpace(user.DisplayName),
+		FirstName:          strings.TrimSpace(user.FirstName),
+		LastName:           strings.TrimSpace(user.LastName),
+		Age:                user.Age,
+		Gender:             strings.TrimSpace(user.Gender),
+		Role:               string(user.Role),
+		Badges:             user.Badges,
+		NeedsProfileSetup:  !user.ProfileInitialized,
+		CreatedAt:          user.CreatedAt,
+		HasPassword:        hasPassword,
+		LinkedAccounts:     linkedAccounts,
+		PendingRoleRequest: pendingRoleRequest,
+	}
+}
+
+func newRoleRequestStatusResponse(request domain.ModerationRoleRequest) *roleRequestStatusResponse {
+	return &roleRequestStatusResponse{
+		ID:            request.ID,
+		RequestedRole: string(request.RequestedRole),
+		Status:        string(request.Status),
+		CreatedAt:     request.CreatedAt,
 	}
 }
 

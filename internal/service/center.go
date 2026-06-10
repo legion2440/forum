@@ -28,6 +28,7 @@ type CenterService struct {
 	users         repo.UserRepo
 	posts         repo.PostRepo
 	comments      repo.CommentRepo
+	moderation    repo.ModerationRepo
 	clock         clock.Clock
 	realtime      NotificationRealtime
 	appealChecker NotificationAppealChecker
@@ -48,6 +49,9 @@ func NewCenterService(center repo.CenterRepo, users repo.UserRepo, posts repo.Po
 		if checker, ok := dependency.(NotificationAppealChecker); ok && checker != nil {
 			service.appealChecker = checker
 		}
+		if moderation, ok := dependency.(repo.ModerationRepo); ok && moderation != nil {
+			service.moderation = moderation
+		}
 	}
 	return service
 }
@@ -60,7 +64,52 @@ func (s *CenterService) GetUnreadSummary(ctx context.Context, userID int64) (dom
 	if userID <= 0 {
 		return domain.NotificationUnreadSummary{}, ErrInvalidInput
 	}
-	return s.center.CountUnreadNotifications(ctx, userID)
+	return s.notificationSummary(ctx, userID)
+}
+
+func (s *CenterService) notificationSummary(ctx context.Context, userID int64) (domain.NotificationUnreadSummary, error) {
+	summary, err := s.center.CountUnreadNotifications(ctx, userID)
+	if err != nil {
+		return summary, err
+	}
+	management, err := s.pendingManagementRequestCount(ctx, userID)
+	if err != nil {
+		return summary, err
+	}
+	summary.Management = management
+	return summary, nil
+}
+
+func (s *CenterService) pendingManagementRequestCount(ctx context.Context, userID int64) (int, error) {
+	if s.moderation == nil {
+		return 0, nil
+	}
+	viewer, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	if viewer.Role != domain.RoleAdmin && viewer.Role != domain.RoleOwner {
+		return 0, nil
+	}
+	requests, err := s.moderation.ListRoleRequests(ctx, repo.RoleRequestFilter{
+		ViewerRole: viewer.Role,
+		Status:     domain.RoleRequestStatusPending,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return len(requests), nil
+}
+
+func (s *CenterService) publishNotificationSummary(ctx context.Context, userID int64) {
+	if s.realtime == nil || userID <= 0 {
+		return
+	}
+	summary, err := s.notificationSummary(ctx, userID)
+	if err != nil {
+		return
+	}
+	s.realtime.PublishNotificationSummary(userID, summary)
 }
 
 func (s *CenterService) ListNotifications(ctx context.Context, userID int64, filter domain.NotificationFilter) (domain.NotificationList, error) {
@@ -98,7 +147,7 @@ func (s *CenterService) ListNotifications(ctx context.Context, userID int64, fil
 		items = append(items, item)
 	}
 
-	summary, err := s.center.CountUnreadNotifications(ctx, userID)
+	summary, err := s.notificationSummary(ctx, userID)
 	if err != nil {
 		return domain.NotificationList{}, err
 	}
@@ -134,7 +183,7 @@ func (s *CenterService) MarkNotificationRead(ctx context.Context, userID, notifi
 	if err != nil {
 		return nil, domain.NotificationUnreadSummary{}, err
 	}
-	summary, err := s.center.CountUnreadNotifications(ctx, userID)
+	summary, err := s.notificationSummary(ctx, userID)
 	if err != nil {
 		return nil, domain.NotificationUnreadSummary{}, err
 	}
@@ -156,7 +205,7 @@ func (s *CenterService) DeleteNotification(ctx context.Context, userID, notifica
 		return domain.NotificationUnreadSummary{}, err
 	}
 
-	summary, err := s.center.CountUnreadNotifications(ctx, userID)
+	summary, err := s.notificationSummary(ctx, userID)
 	if err != nil {
 		return domain.NotificationUnreadSummary{}, err
 	}
@@ -179,7 +228,7 @@ func (s *CenterService) MarkAllNotificationsRead(ctx context.Context, userID int
 		return domain.NotificationUnreadSummary{}, err
 	}
 
-	summary, err := s.center.CountUnreadNotifications(ctx, userID)
+	summary, err := s.notificationSummary(ctx, userID)
 	if err != nil {
 		return domain.NotificationUnreadSummary{}, err
 	}
@@ -197,7 +246,7 @@ func (s *CenterService) MarkDMConversationNotificationsRead(ctx context.Context,
 	if err := s.center.MarkDMNotificationsRead(ctx, userID, peerID, lastReadMessageID, s.clock.Now()); err != nil {
 		return domain.NotificationUnreadSummary{}, err
 	}
-	summary, err := s.center.CountUnreadNotifications(ctx, userID)
+	summary, err := s.notificationSummary(ctx, userID)
 	if err != nil {
 		return domain.NotificationUnreadSummary{}, err
 	}
@@ -573,7 +622,7 @@ func (s *CenterService) createAndPublishNotification(ctx context.Context, notifi
 	if err != nil {
 		return err
 	}
-	summary, err := s.center.CountUnreadNotifications(ctx, notification.UserID)
+	summary, err := s.notificationSummary(ctx, notification.UserID)
 	if err != nil {
 		return err
 	}

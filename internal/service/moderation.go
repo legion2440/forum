@@ -96,6 +96,17 @@ func (s *ModerationService) RequestRole(ctx context.Context, actorID int64, requ
 	default:
 		return nil, ErrInvalidRoleTransition
 	}
+	pending, err := s.moderation.ListRoleRequests(ctx, repo.RoleRequestFilter{
+		ApplicantID:   actor.ID,
+		RequestedRole: requestedRole,
+		Status:        domain.RoleRequestStatusPending,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) > 0 {
+		return nil, ErrAlreadyPending
+	}
 
 	request, err := s.moderation.CreateRoleRequest(ctx, repo.RoleRequestCreateInput{
 		Requester:     *actor,
@@ -108,6 +119,23 @@ func (s *ModerationService) RequestRole(ctx context.Context, actorID int64, requ
 	}
 	s.notifyRoleRequest(ctx, *actor, *request)
 	return request, nil
+}
+
+func (s *ModerationService) GetMyPendingRoleRequest(ctx context.Context, actorID int64) (*domain.ModerationRoleRequest, error) {
+	if actorID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	requests, err := s.moderation.ListRoleRequests(ctx, repo.RoleRequestFilter{
+		ApplicantID: actorID,
+		Status:      domain.RoleRequestStatusPending,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(requests) == 0 {
+		return nil, nil
+	}
+	return &requests[0], nil
 }
 
 func (s *ModerationService) ListRoleRequests(ctx context.Context, actorID int64, requestedRole domain.UserRole, status domain.RoleRequestStatus) ([]domain.ModerationRoleRequest, error) {
@@ -953,22 +981,7 @@ func (s *ModerationService) notifyRoleRequest(ctx context.Context, actor domain.
 	if s.center == nil {
 		return
 	}
-	for _, reviewer := range s.usersByRoles(ctx, roleRequestRecipients(request.RequestedRole)...) {
-		_ = s.center.createAndPublishNotification(ctx, domain.Notification{
-			UserID:      reviewer.ID,
-			ActorUserID: int64Ptr(actor.ID),
-			Bucket:      "management",
-			Type:        "role_request_created",
-			EntityType:  domain.NotificationEntityTypeUser,
-			EntityID:    request.Applicant.ID,
-			Payload: domain.NotificationPayload{
-				ActorName:     displayNameOrUsername(&actor),
-				ActorUsername: actor.Username,
-				Reason:        string(request.RequestedRole),
-			},
-			CreatedAt: request.CreatedAt,
-		})
-	}
+	s.publishRoleRequestReviewerSummaries(ctx, request.RequestedRole)
 }
 
 func (s *ModerationService) notifyRoleRequestReviewed(ctx context.Context, actor domain.User, request domain.ModerationRoleRequest) {
@@ -978,8 +991,8 @@ func (s *ModerationService) notifyRoleRequestReviewed(ctx context.Context, actor
 	_ = s.center.createAndPublishNotification(ctx, domain.Notification{
 		UserID:      request.Applicant.ID,
 		ActorUserID: int64Ptr(actor.ID),
-		Bucket:      "management",
-		Type:        "role_request_reviewed",
+		Bucket:      domain.NotificationBucketManagement,
+		Type:        domain.NotificationTypeRoleRequestReviewed,
 		EntityType:  domain.NotificationEntityTypeUser,
 		EntityID:    request.Applicant.ID,
 		Payload: domain.NotificationPayload{
@@ -989,6 +1002,16 @@ func (s *ModerationService) notifyRoleRequestReviewed(ctx context.Context, actor
 		},
 		CreatedAt: s.clock.Now(),
 	})
+	s.publishRoleRequestReviewerSummaries(ctx, request.RequestedRole)
+}
+
+func (s *ModerationService) publishRoleRequestReviewerSummaries(ctx context.Context, requestedRole domain.UserRole) {
+	if s.center == nil {
+		return
+	}
+	for _, reviewer := range s.usersByRoles(ctx, roleRequestRecipients(requestedRole)...) {
+		s.center.publishNotificationSummary(ctx, reviewer.ID)
+	}
 }
 
 func (s *ModerationService) notifyRoleChanged(ctx context.Context, actor domain.User, target domain.User) {

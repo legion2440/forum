@@ -138,7 +138,13 @@ func (r *ModerationRepo) ListRoleRequests(ctx context.Context, filter repo.RoleR
 		args = append(args, string(domain.RoleModerator))
 	case domain.RoleOwner:
 	default:
-		query.WriteString(` AND 1 = 0`)
+		if filter.ApplicantID <= 0 {
+			query.WriteString(` AND 1 = 0`)
+		}
+	}
+	if filter.ApplicantID > 0 {
+		query.WriteString(` AND rr.requester_user_id = ?`)
+		args = append(args, filter.ApplicantID)
 	}
 	if filter.RequestedRole != "" {
 		query.WriteString(` AND rr.requested_role = ?`)

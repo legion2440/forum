@@ -321,6 +321,12 @@ function normalizePersonRecord(user) {
   };
 }
 
+function getPendingRoleRequestRole(profile) {
+  const request = profile && profile.pendingRoleRequest;
+  if (!request || String(request.status || "").trim().toLowerCase() !== "pending") return "";
+  return normalizeRole(request.requestedRole);
+}
+
 function normalizeAttachment(attachment) {
   if (!attachment || typeof attachment !== "object") return null;
   const id = normalizeUserID(attachment.id);
@@ -476,6 +482,11 @@ function getNotificationBucketUnreadCount(bucket) {
 function getTotalUnreadCount() {
   const summary = state.center && state.center.summary ? state.center.summary : null;
   return summary ? Math.max(0, Number(summary.total || 0)) : 0;
+}
+
+function hasManagementAttention() {
+  const summary = state.center && state.center.summary ? state.center.summary : null;
+  return isAdminRole(getCurrentUserRole()) && summary && Number(summary.management || 0) > 0;
 }
 
 function getNotificationsLabel(totalUnread = getTotalUnreadCount()) {
@@ -2452,7 +2463,11 @@ function renderContentFlags(flags) {
   `;
 }
 
-function renderPostFlags(post) {
+function renderPostFlags(post, { collapseDeleted = false } = {}) {
+  if (collapseDeleted && isDeletedPost(post)) {
+    return renderContentFlags(["[deleted]"]);
+  }
+
   const flags = [];
   if (isUnderReviewPost(post)) flags.push("under review");
   if (isDeletedPost(post)) flags.push("[deleted]");
@@ -2529,21 +2544,71 @@ function renderCommentModerationActions(comment, { compact = false } = {}) {
 function renderProfileRoleActions(profile, isSelf) {
   if (!profile) return "";
   const viewerRole = getCurrentUserRole();
-  const targetActions = !isSelf ? getAvailableRoleActions(profile.role, profile.id) : [];
+  const canManageTarget = !isSelf && isAdminRole(viewerRole);
+  const targetActions = canManageTarget ? getAvailableRoleActions(profile.role, profile.id) : [];
   const selfActions = [];
   if (isSelf) {
+    const pendingRole = getPendingRoleRequestRole(profile);
     if (normalizeRole(profile.role) === "user") {
-      selfActions.push(`<button class="btn btn-ghost btn-compact" type="button" data-action="request-role" data-requested-role="moderator">Request moderator</button>`);
+      selfActions.push(
+        pendingRole === "moderator"
+          ? { type: "pending", role: "moderator", label: "Moderator request pending", kind: "pending" }
+          : { type: "request", role: "moderator", label: "Request moderator role", kind: "promote" }
+      );
     } else if (normalizeRole(profile.role) === "moderator") {
-      selfActions.push(`<button class="btn btn-ghost btn-compact" type="button" data-action="request-role" data-requested-role="admin">Request admin</button>`);
+      selfActions.push(
+        pendingRole === "admin"
+          ? { type: "pending", role: "admin", label: "Admin request pending", kind: "pending" }
+          : { type: "request", role: "admin", label: "Request admin role", kind: "promote" }
+      );
     }
   }
-  const directActions = targetActions.map((action) => `
-    <button class="btn btn-ghost btn-compact" type="button" data-action="change-user-role" data-user-id="${escapeHTML(String(profile.id))}" data-next-role="${escapeHTML(action.role)}">${escapeHTML(action.label)}</button>
-  `);
-  const buttons = [...selfActions, ...directActions];
-  if (!buttons.length || (!isSelf && !isAdminRole(viewerRole))) return "";
-  return `<div class="profile-actions">${buttons.join("")}</div>`;
+  const actions = [...selfActions, ...targetActions];
+  if (!actions.length && !canManageTarget) return "";
+
+  const renderActionButton = (action) => {
+    const className =
+      action.kind === "demote"
+        ? "btn btn-ghost btn-compact profile-role-action profile-role-action-demote"
+        : action.kind === "pending"
+          ? "btn btn-ghost btn-compact profile-role-action profile-role-action-pending"
+          : "btn btn-primary btn-compact profile-role-action profile-role-action-promote";
+    if (action.type === "pending") {
+      return `<button class="${className}" type="button" disabled>${escapeHTML(action.label)}</button>`;
+    }
+    if (action.type === "request") {
+      return `<button class="${className}" type="button" data-action="request-role" data-requested-role="${escapeHTML(action.role)}">${escapeHTML(action.label)}</button>`;
+    }
+    return `<button class="${className}" type="button" data-action="change-user-role" data-user-id="${escapeHTML(String(profile.id))}" data-next-role="${escapeHTML(action.role)}">${escapeHTML(action.label)}</button>`;
+  };
+
+  const promoteButtons = actions.filter((action) => action.kind !== "demote").map(renderActionButton).join("");
+  const demoteButtons = actions.filter((action) => action.kind === "demote").map(renderActionButton).join("");
+  const actionLabels = actions.map((action) => action.label);
+  const hasPendingAction = actions.some((action) => action.kind === "pending");
+  const availableText = actionLabels.length
+    ? hasPendingAction
+      ? actionLabels.join(", ")
+      : `Available ${actionLabels.length === 1 ? "action" : "actions"}: ${actionLabels.join(", ")}`
+    : "No role changes available.";
+
+  return `
+    <section class="profile-role-actions" aria-label="Role management">
+      <div class="profile-role-summary">
+        <h3>Role management</h3>
+        <div class="profile-role-current">Current role: <strong>${escapeHTML(humanizeRole(profile.role))}</strong></div>
+        <p>${escapeHTML(availableText)}</p>
+      </div>
+      ${
+        actions.length
+          ? `<div class="profile-actions">
+              ${promoteButtons ? `<div class="profile-role-action-group">${promoteButtons}</div>` : ""}
+              ${demoteButtons ? `<div class="profile-role-action-group profile-role-action-group-demote">${demoteButtons}</div>` : ""}
+            </div>`
+          : ""
+      }
+    </section>
+  `;
 }
 
 function getActiveCommentReply(postID) {
@@ -2593,7 +2658,7 @@ function renderPostCard(post) {
             <div class="meta-line">${escapeHTML(formatDate(post.created_at))}</div>
           </div>
         </div>
-        ${renderPostFlags(post)}
+        ${renderPostFlags(post, { collapseDeleted: true })}
         <p class="post-card-body">${escapeHTML(post.body)}</p>
         ${attachmentMarkup ? `<div class="post-card-media">${attachmentMarkup}</div>` : ""}
         <div class="action-row" data-post="${post.id}">
@@ -3856,9 +3921,18 @@ function renderCenterTabs(activeTab) {
     <div class="center-tabs" role="tablist" aria-label="Center tabs">
       ${tabs
         .map(
-          (tab) => `
-            <a class="center-tab ${activeTab === tab.key ? "is-active" : ""}" data-link href="${escapeHTML(getCenterTabPath(tab.key))}" role="tab" aria-selected="${activeTab === tab.key ? "true" : "false"}">${escapeHTML(tab.label)}</a>
-          `
+          (tab) => {
+            const tabClasses = [
+              "center-tab",
+              activeTab === tab.key ? "is-active" : "",
+              tab.key === "management" && hasManagementAttention() ? "has-attention" : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return `
+              <a class="${tabClasses}" data-link href="${escapeHTML(getCenterTabPath(tab.key))}" role="tab" aria-selected="${activeTab === tab.key ? "true" : "false"}">${escapeHTML(tab.label)}</a>
+            `;
+          }
         )
         .join("")}
     </div>
@@ -4371,7 +4445,7 @@ function renderRoleRequestItem(item) {
       <div class="center-item-actions">
         <a class="btn btn-ghost btn-compact" data-link href="${escapeHTML(getProfilePath(item.applicant && item.applicant.username))}">Open profile</a>
         ${String(item.status) === "pending" ? `<button class="btn btn-primary btn-compact" type="button" data-action="review-role-request" data-request-id="${escapeHTML(String(item.id))}" data-request-approve="1">Approve</button>` : ""}
-        ${String(item.status) === "pending" ? `<button class="btn btn-ghost btn-compact" type="button" data-action="review-role-request" data-request-id="${escapeHTML(String(item.id))}" data-request-approve="0">Reject</button>` : ""}
+        ${String(item.status) === "pending" ? `<button class="btn btn-ghost btn-compact btn-negative" type="button" data-action="review-role-request" data-request-id="${escapeHTML(String(item.id))}" data-request-approve="0">Reject</button>` : ""}
       </div>
     </article>
   `;
@@ -4382,13 +4456,13 @@ function getAvailableRoleActions(targetRole, targetID) {
   const target = normalizeRole(targetRole);
   if (normalizeUserID(targetID) === getCurrentUserID()) return [];
   if (viewerRole === "owner") {
-    if (target === "user") return [{ role: "moderator", label: "Promote to moderator" }, { role: "admin", label: "Promote to admin" }];
-    if (target === "moderator") return [{ role: "admin", label: "Promote to admin" }, { role: "user", label: "Demote" }];
-    if (target === "admin") return [{ role: "moderator", label: "Demote" }];
+    if (target === "user") return [{ role: "moderator", label: "Make moderator", kind: "promote" }, { role: "admin", label: "Make admin", kind: "promote" }];
+    if (target === "moderator") return [{ role: "admin", label: "Make admin", kind: "promote" }, { role: "user", label: "Demote to user", kind: "demote" }];
+    if (target === "admin") return [{ role: "moderator", label: "Demote to moderator", kind: "demote" }];
   }
   if (viewerRole === "admin") {
-    if (target === "user") return [{ role: "moderator", label: "Promote to moderator" }];
-    if (target === "moderator") return [{ role: "user", label: "Demote moderator" }];
+    if (target === "user") return [{ role: "moderator", label: "Make moderator", kind: "promote" }];
+    if (target === "moderator") return [{ role: "user", label: "Demote to user", kind: "demote" }];
   }
   return [];
 }
@@ -5322,8 +5396,12 @@ async function requestRoleFlow(requestedRole) {
       note: values.note,
     }),
   });
+  await ensureUser(true);
   await loadManagementRequests(true).catch(() => {});
   await ensureNotificationSummary(true);
+  if (location.pathname.startsWith("/u/")) {
+    router();
+  }
   return true;
 }
 
@@ -6423,7 +6501,7 @@ async function postView(params) {
                   <div class="meta-line">${escapeHTML(formatDate(post.created_at))}</div>
                 </div>
               </div>
-              ${renderPostFlags(post)}
+              ${renderPostFlags(post, { collapseDeleted: true })}
               <p class="hero-body">${escapeHTML(post.body)}</p>
               ${attachmentMarkup ? `<div class="post-detail-media">${attachmentMarkup}</div>` : ""}
               <div class="action-row" data-post="${post.id}">
@@ -6949,14 +7027,10 @@ document.addEventListener("click", (e) => {
     e.preventDefault();
     const requestedRole = requestRoleButton.getAttribute("data-requested-role");
     if (!requestedRole) return;
-    requestRoleFlow(requestedRole)
-      .then((done) => {
-        if (done) alert("Role request sent.");
-      })
-      .catch((err) => {
-        if (err && err.handled) return;
-        alert(err.message || "Failed to send role request.");
-      });
+    requestRoleFlow(requestedRole).catch((err) => {
+      if (err && err.handled) return;
+      alert(err.message || "Failed to send role request.");
+    });
     return;
   }
 

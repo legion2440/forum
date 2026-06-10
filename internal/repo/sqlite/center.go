@@ -80,12 +80,12 @@ func (r *CenterRepo) ListNotifications(ctx context.Context, userID int64, filter
 		args  []any
 	)
 	query.WriteString(`
-		SELECT id, user_id, actor_user_id, bucket, type, entity_type, entity_id,
-		       secondary_entity_type, secondary_entity_id, payload_json, is_read, created_at, read_at
-		FROM notifications
-		WHERE user_id = ?
-	`)
-	args = append(args, userID)
+			SELECT id, user_id, actor_user_id, bucket, type, entity_type, entity_id,
+			       secondary_entity_type, secondary_entity_id, payload_json, is_read, created_at, read_at
+			FROM notifications
+			WHERE user_id = ? AND type <> ?
+		`)
+	args = append(args, userID, domain.NotificationTypeRoleRequestCreated)
 	if strings.TrimSpace(filter.Bucket) != "" {
 		query.WriteString(` AND bucket = ?`)
 		args = append(args, filter.Bucket)
@@ -124,10 +124,10 @@ func (r *CenterRepo) CountUnreadNotifications(ctx context.Context, userID int64)
 			COALESCE(SUM(CASE WHEN is_read = 0 AND bucket = ? THEN 1 ELSE 0 END), 0) AS reports_total,
 			COALESCE(SUM(CASE WHEN is_read = 0 AND bucket = ? THEN 1 ELSE 0 END), 0) AS appeals_total,
 			COALESCE(SUM(CASE WHEN is_read = 0 AND bucket = ? THEN 1 ELSE 0 END), 0) AS management_total
-		FROM notifications
-		WHERE user_id = ?
-	`, domain.NotificationBucketDM, domain.NotificationBucketMyContent, domain.NotificationBucketSubscriptions,
-		domain.NotificationBucketDeleted, domain.NotificationBucketReports, domain.NotificationBucketAppeals, domain.NotificationBucketManagement, userID)
+			FROM notifications
+			WHERE user_id = ? AND type <> ?
+		`, domain.NotificationBucketDM, domain.NotificationBucketMyContent, domain.NotificationBucketSubscriptions,
+		domain.NotificationBucketDeleted, domain.NotificationBucketReports, domain.NotificationBucketAppeals, domain.NotificationBucketManagement, userID, domain.NotificationTypeRoleRequestCreated)
 
 	var summary domain.NotificationUnreadSummary
 	if err := row.Scan(&summary.Total, &summary.DM, &summary.MyContent, &summary.Subscriptions, &summary.Deleted, &summary.Reports, &summary.Appeals, &summary.Management); err != nil {

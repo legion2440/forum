@@ -147,6 +147,7 @@ type RoleRequestFilter struct {
 	ViewerRole    domain.UserRole
 	Status        domain.RoleRequestStatus
 	RequestedRole domain.UserRole
+	ApplicantID   int64
 }
 
 type ReportFilter struct {

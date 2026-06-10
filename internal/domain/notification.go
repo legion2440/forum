@@ -21,6 +21,8 @@ const (
 	NotificationTypeCommentDisliked         = "comment_disliked"
 	NotificationTypeSubscribedPostCommented = "subscribed_post_commented"
 	NotificationTypeFollowedAuthorPublished = "followed_author_published"
+	NotificationTypeRoleRequestCreated      = "role_request_created"
+	NotificationTypeRoleRequestReviewed     = "role_request_reviewed"
 )
 
 const (

@@ -56,7 +56,7 @@ func newModerationHandler(t *testing.T) (*moderationHandlerFixture, func()) {
 
 	testClock := fixedClock{t: time.Unix(1700020000, 0).UTC()}
 	authService := service.NewAuthService(userRepo, sessionRepo, testClock, &seqToken{}, 24*time.Hour)
-	centerService := service.NewCenterService(centerRepo, userRepo, postRepo, commentRepo, testClock)
+	centerService := service.NewCenterService(centerRepo, userRepo, postRepo, commentRepo, testClock, moderationRepo)
 	postService := service.NewPostService(postRepo, commentRepo, categoryRepo, reactionRepo, nil, testClock, centerService)
 	moderationService := service.NewModerationService(userRepo, postRepo, commentRepo, categoryRepo, moderationRepo, testClock, centerService)
 	centerService.SetAppealChecker(moderationService)
@@ -190,9 +190,37 @@ func TestModerationHTTP_RoleFlowReportsAndDeletedPlaceholders(t *testing.T) {
 	requestBody := decodeBody[map[string]any](t, requestRec)
 	requestID := int64(requestBody["id"].(float64))
 
+	moderatorPendingMeRec := performJSONRequest(t, handler, http.MethodGet, "/api/me", nil, moderatorToken)
+	if moderatorPendingMeRec.Code != http.StatusOK ||
+		!strings.Contains(moderatorPendingMeRec.Body.String(), `"pendingRoleRequest"`) ||
+		!strings.Contains(moderatorPendingMeRec.Body.String(), `"requestedRole":"moderator"`) {
+		t.Fatalf("expected pending moderator request in /api/me, got status=%d body=%q", moderatorPendingMeRec.Code, moderatorPendingMeRec.Body.String())
+	}
+
 	adminRequestsRec := performJSONRequest(t, handler, http.MethodGet, "/api/moderation/requests", nil, adminToken)
 	if adminRequestsRec.Code != http.StatusOK || !strings.Contains(adminRequestsRec.Body.String(), `"id":`+strconv.FormatInt(requestID, 10)) {
 		t.Fatalf("admin should receive moderator request, got status=%d body=%q", adminRequestsRec.Code, adminRequestsRec.Body.String())
+	}
+
+	adminSummaryRec := performJSONRequest(t, handler, http.MethodGet, "/api/center/summary", nil, adminToken)
+	if adminSummaryRec.Code != http.StatusOK || !strings.Contains(adminSummaryRec.Body.String(), `"management":1`) {
+		t.Fatalf("admin should see management attention summary, got status=%d body=%q", adminSummaryRec.Code, adminSummaryRec.Body.String())
+	}
+
+	adminNotificationsRec := performJSONRequest(t, handler, http.MethodGet, "/api/center/notifications?bucket=all", nil, adminToken)
+	if adminNotificationsRec.Code != http.StatusOK {
+		t.Fatalf("admin notifications status=%d body=%q", adminNotificationsRec.Code, adminNotificationsRec.Body.String())
+	}
+	if strings.Contains(adminNotificationsRec.Body.String(), "role_request_created") || strings.Contains(adminNotificationsRec.Body.String(), "submitted a role request") {
+		t.Fatalf("role request creation should not appear in notifications, got body=%q", adminNotificationsRec.Body.String())
+	}
+
+	duplicateRequestRec := performJSONRequest(t, handler, http.MethodPost, "/api/moderation/requests", map[string]any{
+		"requestedRole": "moderator",
+		"note":          "duplicate",
+	}, moderatorToken)
+	if duplicateRequestRec.Code != http.StatusConflict || !strings.Contains(duplicateRequestRec.Body.String(), "already_pending") {
+		t.Fatalf("duplicate pending request should conflict, got status=%d body=%q", duplicateRequestRec.Code, duplicateRequestRec.Body.String())
 	}
 
 	approveRequestRec := performJSONRequest(t, handler, http.MethodPost, "/api/moderation/requests/"+strconv.FormatInt(requestID, 10)+"/review", map[string]any{
@@ -206,6 +234,14 @@ func TestModerationHTTP_RoleFlowReportsAndDeletedPlaceholders(t *testing.T) {
 	moderatorMeRec := performJSONRequest(t, handler, http.MethodGet, "/api/me", nil, moderatorToken)
 	if moderatorMeRec.Code != http.StatusOK || !strings.Contains(moderatorMeRec.Body.String(), `"role":"moderator"`) {
 		t.Fatalf("expected immediate moderator role, got status=%d body=%q", moderatorMeRec.Code, moderatorMeRec.Body.String())
+	}
+	if strings.Contains(moderatorMeRec.Body.String(), `"pendingRoleRequest"`) {
+		t.Fatalf("pending role request should clear after approval, got status=%d body=%q", moderatorMeRec.Code, moderatorMeRec.Body.String())
+	}
+
+	adminSummaryAfterReviewRec := performJSONRequest(t, handler, http.MethodGet, "/api/center/summary", nil, adminToken)
+	if adminSummaryAfterReviewRec.Code != http.StatusOK || !strings.Contains(adminSummaryAfterReviewRec.Body.String(), `"management":0`) {
+		t.Fatalf("admin management attention should clear, got status=%d body=%q", adminSummaryAfterReviewRec.Code, adminSummaryAfterReviewRec.Body.String())
 	}
 
 	obscenePostRec := performJSONRequest(t, handler, http.MethodPost, "/api/posts", map[string]any{
